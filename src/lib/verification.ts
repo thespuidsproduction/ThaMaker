@@ -1,4 +1,5 @@
 import type { HonourKind } from '@/domain/honours';
+import { createHmac } from 'node:crypto';
 import { constantTimeEquals, hmac, sha256 } from '@/lib/crypto';
 
 /**
@@ -83,6 +84,47 @@ export function canonicalPayload(payload: AchievementPayload): string {
 
 export function payloadDigest(payload: AchievementPayload): string {
   return sha256(canonicalPayload(payload));
+}
+
+/**
+ * The digest PALMA used to write, before the seed stopped carrying its own
+ * drifted copy of this file.
+ *
+ * It computed an HMAC keyed with the literal string 'digest' where the
+ * application computes a plain SHA-256 of the same canonical string, so no
+ * record written by it could ever match what the verify page recomputed.
+ *
+ * This is kept, and deliberately, because it is a *proof*. The digest exists
+ * for one job: to say, without needing a key, whether an honour's contents are
+ * still the ones that were sealed. A stale digest broke that job and left the
+ * page unable to tell a misconfigured server from a forgery — so it said
+ * forgery, about honours that were perfectly intact.
+ *
+ * Recognising the old formula restores the answer. If a stored digest equals
+ * this, then these exact contents passed through the old seed and have not
+ * changed since; the row is legacy, not altered. That is a fact about the
+ * data, not a guess, and it is the difference between telling a creator their
+ * record is unverifiable and telling them nothing is wrong with it.
+ *
+ * It is never written. Only ever recognised, and then replaced.
+ */
+export function legacyPayloadDigest(payload: AchievementPayload): string {
+  return createHmac('sha256', 'digest').update(canonicalPayload(payload)).digest('hex');
+}
+
+/** What a stored digest proves about the contents beside it. */
+export type DigestStanding =
+  /** Current format, and it matches: the contents are the sealed ones. */
+  | 'intact'
+  /** The old seed's format, and it matches: also the sealed ones, just stale. */
+  | 'intact-legacy'
+  /** Matches neither. Says nothing either way, which is the point. */
+  | 'unrecognised';
+
+export function digestStanding(payload: AchievementPayload, stored: string): DigestStanding {
+  if (stored === payloadDigest(payload)) return 'intact';
+  if (stored === legacyPayloadDigest(payload)) return 'intact-legacy';
+  return 'unrecognised';
 }
 
 /** Binds every identity field of an honour — editing any of them breaks it. */

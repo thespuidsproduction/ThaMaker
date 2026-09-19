@@ -541,6 +541,34 @@ export const getAchievementByCode = cache(
   },
 );
 
+/**
+ * Rewrite a verification record's digest, and nothing else.
+ *
+ * Called only from the verify page, and only when the signature over the same
+ * contents has already checked out against this server's key — which makes the
+ * correct digest a matter of arithmetic rather than judgement. See the comment
+ * at the call site for why that distinction is the whole safety argument.
+ *
+ * Deliberately narrow: it takes the value to write rather than recomputing
+ * one, touches a single column, and matches on the digest it expects to
+ * replace so two concurrent readers cannot fight over it. It cannot change a
+ * signature, a code, or anything an honour says about anybody.
+ *
+ * Failure is silence. This runs after the response has been sent, on a page
+ * that has already rendered correctly without it; a reader waiting on their
+ * honour must never see an error because a housekeeping write lost a race.
+ */
+export async function healDigest(code: string, digest: string): Promise<void> {
+  try {
+    await prisma.verificationRecord.updateMany({
+      where: { code, payloadDigest: { not: digest } },
+      data: { payloadDigest: digest },
+    });
+  } catch {
+    // The page was right either way. It will be offered again next time.
+  }
+}
+
 // ── Journal ──────────────────────────────────────────────────────────────────
 
 export const listArticles = cache(

@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { after } from 'next/server';
 import { BadgeCheck, ShieldAlert } from 'lucide-react';
 import { Container, Section } from '@/components/palma/layout';
 import { Button } from '@/components/ui/button';
@@ -13,12 +14,13 @@ import { signingSecret } from '@/lib/env';
 import {
   isValidCodeFormat,
   normaliseCode,
+  digestStanding,
   payloadDigest,
   verifyAchievement,
 } from '@/lib/verification';
 import { HONOUR_LABEL } from '@/components/palma/badges';
 import { isThePalma } from '@/domain/honours';
-import { getAchievementByCode } from '@/server/data/queries';
+import { getAchievementByCode, healDigest } from '@/server/data/queries';
 
 export const revalidate = 300;
 
@@ -85,9 +87,40 @@ export default async function VerifyPage({ params }: Params) {
    * Telling a visitor that an intact record "does not match its contents" is
    * accusing a creator of forgery to cover a configuration mistake. PALMA says
    * which of the two it is.
+   *
+   * `digestStanding` recognises the old seed's digest format as well as the
+   * current one, which is what stops a database written before that bug was
+   * fixed from being read as a forgery. Both formats are proof of the same
+   * thing — these contents went in and have not changed — and a proof does
+   * not expire because the code that wrote it did.
    */
-  const contentsIntact = payloadDigest(payload) === record.payloadDigest;
+  const standing = digestStanding(payload, record.payloadDigest);
+  const contentsIntact = standing !== 'unrecognised';
   const misconfigured = !signatureValid && contentsIntact;
+
+  /**
+   * Healing a stale digest, once, on the way past.
+   *
+   * A valid signature over a legacy digest is the one case where the right
+   * answer is provable rather than judged: this server's key signed these
+   * exact contents, so the fields are beyond question and the digest column is
+   * simply holding an old format. Rewriting it asserts nothing new and
+   * destroys no evidence — the signature already said everything the digest is
+   * being asked to confirm.
+   *
+   * Doing it here rather than in a script is the point. The old seed's bug
+   * needed an operator to notice, read a runbook and run a command, which is
+   * three things that do not happen. Now the first time anybody looks at an
+   * honour, it fixes itself, and a database nobody maintains converges on
+   * correct instead of drifting.
+   *
+   * Only ever this case. An invalid signature is never healed by anything
+   * automatic: that is the case where rewriting would bless whatever is in the
+   * row, and it stays a decision a person makes at a command line.
+   */
+  if (signatureValid && standing === 'intact-legacy') {
+    after(() => healDigest(record.code, payloadDigest(payload)));
+  }
 
   const revoked = record.state === 'revoked';
   const verified = signatureValid && !revoked;

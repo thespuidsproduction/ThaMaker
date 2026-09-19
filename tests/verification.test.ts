@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   canonicalPayload,
   deriveCode,
+  digestStanding,
+  legacyPayloadDigest,
+  payloadDigest,
   isValidCodeFormat,
   normaliseCode,
   signAchievement,
@@ -155,5 +158,52 @@ describe('a seal covers a moment, not a moving target', () => {
         `${field} does not affect the signature`,
       ).not.toBe(canonicalPayload(payload));
     }
+  });
+});
+
+/**
+ * Reading a database written by older code.
+ *
+ * The seed once wrote `payloadDigest` as an HMAC keyed with the literal string
+ * 'digest' where the application computes a plain SHA-256. Every honour in
+ * every database seeded before that was fixed carries the old format, and the
+ * verify page could not tell those apart from contents that had been altered —
+ * so on a server whose AUTH_SECRET had also changed, it called intact honours
+ * forgeries.
+ *
+ * Recognising the old formula is a proof, not a guess: if a stored digest
+ * equals it, those exact contents passed through the old seed and have not
+ * moved since.
+ */
+describe('a digest written by the old seed still proves what it proved', () => {
+  it('recognises the current format', () => {
+    expect(digestStanding(payload, payloadDigest(payload))).toBe('intact');
+  });
+
+  it('recognises the old seed’s format as intact, not as tampering', () => {
+    expect(digestStanding(payload, legacyPayloadDigest(payload))).toBe('intact-legacy');
+  });
+
+  it('the two formats are genuinely different, so this is not a tautology', () => {
+    expect(legacyPayloadDigest(payload)).not.toBe(payloadDigest(payload));
+  });
+
+  it('a digest over different contents is recognised in neither format', () => {
+    const altered = { ...payload, creatorName: 'Someone Else' };
+    expect(digestStanding(altered, payloadDigest(payload))).toBe('unrecognised');
+    expect(digestStanding(altered, legacyPayloadDigest(payload))).toBe('unrecognised');
+  });
+
+  it('garbage is unrecognised rather than quietly accepted', () => {
+    for (const rubbish of ['', 'not-a-digest', '0'.repeat(64)]) {
+      expect(digestStanding(payload, rubbish)).toBe('unrecognised');
+    }
+  });
+
+  it('neither format is affected by the signing key, which is the whole point', () => {
+    // The digest is what answers "are these the sealed contents?" when the key
+    // is the thing in doubt. If it depended on the key it could not.
+    const before = [payloadDigest(payload), legacyPayloadDigest(payload)];
+    expect([payloadDigest(payload), legacyPayloadDigest(payload)]).toEqual(before);
   });
 });

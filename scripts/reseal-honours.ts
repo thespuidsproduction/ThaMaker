@@ -53,7 +53,7 @@ async function main() {
   // AUTH_SECRET at call time but env.ts validates at module scope, and ES
   // imports hoist above everything including the env load.
   const { signingSecret } = await import('../src/lib/env');
-  const { payloadDigest, signAchievement, verifyAchievement } =
+  const { digestStanding, payloadDigest, signAchievement, verifyAchievement } =
     await import('../src/lib/verification');
 
   const secret = signingSecret();
@@ -83,23 +83,29 @@ async function main() {
     };
 
     const signatureValid = verifyAchievement(secret, payload, row.signature);
-    const digestValid = payloadDigest(payload) === row.payloadDigest;
 
-    // Four states, and the pair of checks separates them cleanly.
+    // `intact` and `intact-legacy` both mean the contents are the ones that
+    // were sealed; they differ only in which formula wrote the digest. Only
+    // `unrecognised` says nothing, and that is the one that needs a person.
+    const standing = digestStanding(payload, row.payloadDigest);
+    const digestValid = standing === 'intact';
+    const contentsIntact = standing !== 'unrecognised';
+
+    // Four states, and the two checks separate them cleanly.
     //
-    // A good signature over a bad digest is the old seed's bug and nothing
+    // A good signature over a stale digest is the old seed's bug and nothing
     // else: this very key signed these very contents, so the fields are the
-    // ones that were sealed and only the digest column is wrong.
+    // ones that were sealed and only the digest column is behind.
     //
-    // A bad signature over a good digest is a key that changed. The digest
-    // needs no key, so it still says the contents are untouched.
+    // A bad signature over intact contents is a key that changed. The digest
+    // needs no key, so it still vouches for the fields.
     //
-    // Both bad says nothing at all, which is why it is handled separately.
+    // Neither says anything at all, which is why it is handled separately.
     const verdict: Verdict = signatureValid
       ? digestValid
         ? 'sealed'
         : 'stale-digest'
-      : digestValid
+      : contentsIntact
         ? 'wrong-key'
         : 'unexplained';
 
@@ -111,7 +117,7 @@ async function main() {
   console.log(`\n  ${records.length} honours, sealed with a ${secret.length}-character key.\n`);
   report('Verify correctly', by('sealed'));
   report('Signed with a different key, contents provably unchanged', by('wrong-key'));
-  report('Correctly signed, digest written wrong', by('stale-digest'));
+  report('Correctly signed, digest in the old format', by('stale-digest'));
   report('Neither the signature nor the digest can be explained', by('unexplained'));
 
   const explainable = [...by('wrong-key'), ...by('stale-digest')];
